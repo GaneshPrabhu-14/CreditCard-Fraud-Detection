@@ -7,9 +7,9 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from knn_pipeline import predict_knn_account, train_and_evaluate_knn
+from kmeans_pipeline import predict_kmeans_account, train_and_evaluate_kmeans
 
-app = FastAPI(title="KNN Credit Card Anomaly Detection API", version="1.0")
+app = FastAPI(title="K-Means Credit Card Anomaly Detection API", version="1.0")
 
 
 class AccountPayload(BaseModel):
@@ -23,24 +23,22 @@ class AccountPayload(BaseModel):
     TENURE: int
 
 
-class KNNTrainConfig(BaseModel):
-    contamination: float = 0.03
+class KMeansTrainConfig(BaseModel):
     test_size: float = 0.20
-    n_neighbors: int = 10
+    n_clusters: int = 3
 
 
 @app.get("/")
 def root():
-    return {"message": "KNN nearest-neighbor anomaly detection API is running."}
+    return {"message": "K-means clustering anomaly detection API is running."}
 
 
 @app.post("/train")
-def train_model(config: KNNTrainConfig):
+def train_model(config: KMeansTrainConfig):
     try:
-        results = train_and_evaluate_knn(
-            config.contamination,
+        results = train_and_evaluate_kmeans(
             config.test_size,
-            config.n_neighbors,
+            config.n_clusters,
         )
         results["dataset_name"] = "Bundled credit-card sample"
         return results
@@ -53,9 +51,8 @@ def train_model(config: KNNTrainConfig):
 @app.post("/train/upload")
 async def train_uploaded_model(
     request: Request,
-    contamination: float = 0.03,
     test_size: float = 0.20,
-    n_neighbors: int = 10,
+    n_clusters: int = 3,
     filename: str = "Uploaded CSV",
 ):
     content = await request.body()
@@ -66,10 +63,9 @@ async def train_uploaded_model(
 
     try:
         dataset = pd.read_csv(BytesIO(content))
-        results = train_and_evaluate_knn(
-            contamination,
+        results = train_and_evaluate_kmeans(
             test_size,
-            n_neighbors,
+            n_clusters,
             dataset,
         )
         results["dataset_name"] = filename
@@ -85,7 +81,7 @@ async def train_uploaded_model(
 @app.post("/predict")
 def predict_anomaly(payload: AccountPayload):
     try:
-        return predict_knn_account(payload.dict())
+        return predict_kmeans_account(payload.dict())
     except FileNotFoundError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except Exception as error:

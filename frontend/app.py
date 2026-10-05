@@ -3,9 +3,11 @@ import requests
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
+from pathlib import Path
 from io import BytesIO
 
 API_URL = "http://127.0.0.1:8000"
+SUSPICIOUS_SCORE_MARGIN = 0.05
 FEATURE_COLUMNS = [
     "BALANCE",
     "PURCHASES",
@@ -437,19 +439,65 @@ with tab1:
 with tab2:
     st.header("Assess an account")
     st.markdown("Enter account activity to calculate its anomaly risk.")
-    
+
+    dataset_path = Path(__file__).resolve().parents[1] / "data" / "credit_card.csv"
+    try:
+        sample_data = pd.read_csv(dataset_path)
+        numeric_samples = sample_data[FEATURE_COLUMNS].apply(pd.to_numeric, errors="coerce")
+        sample_data[FEATURE_COLUMNS] = numeric_samples.fillna(numeric_samples.median())
+        normal_sample = sample_data.loc[
+            (sample_data["CASH_ADVANCE"] <= 4500) & (sample_data["BALANCE"] <= 8000)
+        ].iloc[0]
+        cash_advance_sample = sample_data.loc[sample_data["CASH_ADVANCE"] > 4500].iloc[0]
+        high_balance_sample = sample_data.loc[sample_data["BALANCE"] > 8000].iloc[0]
+        prediction_samples = {
+            f"Typical activity ({normal_sample['CUST_ID']})": normal_sample,
+            f"High cash advance ({cash_advance_sample['CUST_ID']})": cash_advance_sample,
+            f"High balance ({high_balance_sample['CUST_ID']})": high_balance_sample,
+        }
+    except (FileNotFoundError, KeyError, IndexError, pd.errors.ParserError) as error:
+        st.error(f"Could not load prediction samples from the bundled dataset: {error}")
+        prediction_samples = {}
+
+    def load_prediction_sample():
+        sample = prediction_samples[st.session_state["prediction_sample"]]
+        for column in FEATURE_COLUMNS:
+            value = sample[column]
+            st.session_state[f"prediction_{column}"] = int(value) if column == "TENURE" else float(value)
+
+    if prediction_samples:
+        sample_names = list(prediction_samples)
+        first_sample = prediction_samples[sample_names[0]]
+        for column in FEATURE_COLUMNS:
+            value = first_sample[column]
+            st.session_state.setdefault(
+                f"prediction_{column}", int(value) if column == "TENURE" else float(value)
+            )
+        st.selectbox(
+            "Load a sample account from the bundled dataset",
+            sample_names,
+            key="prediction_sample",
+            on_change=load_prediction_sample,
+        )
+
     with st.form("prediction_form"):
         col1, col2 = st.columns(2)
         with col1:
-            balance = st.number_input("ACCOUNT BALANCE ($)", value=40.90, step=50.0)
-            purchases = st.number_input("TOTAL PURCHASES ($)", value=95.40, step=50.0)
-            installments = st.number_input("INSTALLMENT PURCHASES ($)", value=95.40, step=50.0)
-            cash_advance = st.number_input("CASH ADVANCE ($)", value=0.00, step=100.0)
+            balance = st.number_input("ACCOUNT BALANCE ($)", step=50.0, key="prediction_BALANCE")
+            purchases = st.number_input("TOTAL PURCHASES ($)", step=50.0, key="prediction_PURCHASES")
+            installments = st.number_input(
+                "INSTALLMENT PURCHASES ($)", step=50.0, key="prediction_INSTALLMENTS_PURCHASES"
+            )
+            cash_advance = st.number_input(
+                "CASH ADVANCE ($)", step=100.0, key="prediction_CASH_ADVANCE"
+            )
         with col2:
-            credit_limit = st.number_input("CREDIT LIMIT ($)", value=1000.00, step=500.0)
-            payments = st.number_input("TOTAL PAYMENTS ($)", value=201.80, step=50.0)
-            min_payments = st.number_input("MINIMUM PAYMENTS ($)", value=139.51, step=20.0)
-            tenure = st.slider("TENURE (Months)", 6, 12, 12)
+            credit_limit = st.number_input("CREDIT LIMIT ($)", step=500.0, key="prediction_CREDIT_LIMIT")
+            payments = st.number_input("TOTAL PAYMENTS ($)", step=50.0, key="prediction_PAYMENTS")
+            min_payments = st.number_input(
+                "MINIMUM PAYMENTS ($)", step=20.0, key="prediction_MINIMUM_PAYMENTS"
+            )
+            tenure = st.slider("TENURE (Months)", 6, 12, key="prediction_TENURE")
             
         submit_pred = st.form_submit_button("Evaluate Account Risk", type="primary")
 
@@ -470,13 +518,23 @@ with tab2:
             if res.status_code == 200:
                 result = res.json()
                 st.subheader("Prediction Result")
-                
+
+                decision_score = float(result["decision_score"])
                 if result["is_anomaly"]:
-                    st.error(f"Status: {result['status']}")
+                    risk_status = "HIGH RISK ANOMALY"
+                    st.error(f"Status: {risk_status}")
+                elif decision_score <= SUSPICIOUS_SCORE_MARGIN:
+                    risk_status = "SUSPICIOUS"
+                    st.warning(f"Status: {risk_status}")
                 else:
-                    st.success(f"Status: {result['status']}")
-                    
-                st.info(f"**Anomaly Decision Score:** `{result['decision_score']}` (Negative = Higher Risk)")
+                    risk_status = "NORMAL"
+                    st.success(f"Status: {risk_status}")
+
+                st.info(f"**Anomaly Decision Score:** `{decision_score}` (Negative = Higher Risk)")
+                st.caption(
+                    f"Suspicious is a near-boundary band for scores above 0 through "
+                    f"{SUSPICIOUS_SCORE_MARGIN:.2f}; the model's anomaly cutoff remains 0."
+                )
             else:
                 st.error(f"Prediction Error: {res.text}")
         except Exception as e:

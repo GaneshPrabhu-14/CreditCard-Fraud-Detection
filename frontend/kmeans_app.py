@@ -1,5 +1,4 @@
 from io import BytesIO
-import hashlib
 
 import pandas as pd
 import plotly.express as px
@@ -7,10 +6,7 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
-MODEL_APIS = {
-    "Isolation Forest": "http://127.0.0.1:8000",
-    "K-Nearest Neighbors": "http://127.0.0.1:8001",
-}
+API_URL = "http://127.0.0.1:8001"
 FEATURE_COLUMNS = [
     "BALANCE",
     "PURCHASES",
@@ -22,34 +18,22 @@ FEATURE_COLUMNS = [
     "TENURE",
 ]
 
-st.set_page_config(page_title="KNN Card Anomaly Review", layout="wide")
+st.set_page_config(page_title="Credit card Fraud Detection", layout="wide")
 
-_, model_column, appearance_column = st.columns([2, 5, 2])
-with model_column:
-    selected_model = st.radio(
-        "Model",
-        list(MODEL_APIS),
-        horizontal=True,
-        label_visibility="collapsed",
-        key="selected_anomaly_model",
-    )
-
+brand_column, _, appearance_column = st.columns([3, 5, 2])
+with brand_column:
+    st.markdown("**Credit card Fraud Detection**")
 with appearance_column:
     appearance = st.radio(
         "Appearance",
         ["Light", "Dark"],
         horizontal=True,
         label_visibility="collapsed",
-        key="knn_appearance",
+        key="kmeans_appearance",
     )
 
-is_knn = selected_model == "K-Nearest Neighbors"
-API_URL = MODEL_APIS[selected_model]
-if "model_results" not in st.session_state:
-    st.session_state["model_results"] = {}
-if "knn_eval_data" in st.session_state and "K-Nearest Neighbors" not in st.session_state["model_results"]:
-    st.session_state["model_results"]["K-Nearest Neighbors"] = st.session_state.pop("knn_eval_data")
-
+if "kmeans_results" not in st.session_state:
+    st.session_state["kmeans_results"] = None
 dark_mode = appearance == "Dark"
 theme = {
     "ink": "#e8efeb" if dark_mode else "#202b28",
@@ -62,6 +46,7 @@ theme = {
     "green_soft": "#24372e" if dark_mode else "#e7f1ec",
     "amber": "#f0a46e" if dark_mode else "#c47c47",
     "normal": "#80b69a" if dark_mode else "#6c8f7d",
+    "high_risk": "#e87979" if dark_mode else "#b6483e",
     "grid": "#34423b" if dark_mode else "#e4e9e6",
 }
 
@@ -136,17 +121,12 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-model_summary = (
-        "Accounts with unusually distant neighbors receive higher anomaly scores."
-        if is_knn
-        else "Isolation Forest separates accounts by how isolated their feature patterns are."
-)
 st.markdown(
         f"""<header class="masthead"><div>
             <div class="eyebrow">Risk intelligence / transaction monitoring</div>
-            <h1>{selected_model} anomaly review</h1>
-            <p>{model_summary}</p>
-        </div><div class="service-tag">ACTIVE · {selected_model.upper()}</div></header>""",
+            <h1>K-Means Clustering anomaly review</h1>
+            <p>Accounts farther from their nearest cluster centroid receive higher anomaly scores.</p>
+        </div><div class="service-tag">ACTIVE · K-MEANS</div></header>""",
         unsafe_allow_html=True,
 )
 
@@ -198,19 +178,17 @@ def show_classification_report(data):
         st.markdown(display.to_html(index=False, classes="report-table", border=0), unsafe_allow_html=True)
 
 
-def train_model(model_name, contamination, test_size, n_neighbors, upload_bytes, dataset_name):
-    api_url = MODEL_APIS[model_name]
-    config = {"contamination": contamination, "test_size": test_size}
+def train_model(test_size, n_clusters, upload_bytes, dataset_name):
+    config = {"test_size": test_size}
     parameters = {**config, "filename": dataset_name}
-    if model_name == "K-Nearest Neighbors":
-        config["n_neighbors"] = n_neighbors
-        parameters["n_neighbors"] = n_neighbors
+    config["n_clusters"] = n_clusters
+    parameters["n_clusters"] = n_clusters
 
     if upload_bytes is None:
-        response = requests.post(f"{api_url}/train", json=config, timeout=120)
+        response = requests.post(f"{API_URL}/train", json=config, timeout=120)
     else:
         response = requests.post(
-            f"{api_url}/train/upload",
+            f"{API_URL}/train/upload",
             params=parameters,
             data=upload_bytes,
             headers={"Content-Type": "text/csv"},
@@ -221,16 +199,11 @@ def train_model(model_name, contamination, test_size, n_neighbors, upload_bytes,
             detail = response.json().get("detail", response.text)
         except ValueError:
             detail = response.text
-        raise ValueError(f"{model_name}: {detail}")
+        raise ValueError(f"K-Means Clustering: {detail}")
 
     result = response.json()
-    result["comparison_signature"] = (
-        hashlib.sha256(upload_bytes).hexdigest() if upload_bytes is not None else "bundled-credit-card.csv",
-        contamination,
-        test_size,
-    )
     result["dataset_name"] = dataset_name
-    st.session_state["model_results"][model_name] = result
+    st.session_state["kmeans_results"] = result
     return result
 
 
@@ -241,7 +214,7 @@ with tab_train:
         "Upload a CSV dataset",
         type=["csv"],
         help="Maximum 25 MB. Required fields are listed below; additional columns are ignored.",
-        key="knn_upload",
+        key="kmeans_upload",
     )
     upload_bytes = None
     uploaded_df = None
@@ -267,93 +240,46 @@ with tab_train:
 
     st.caption("Required numeric columns: " + " · ".join(FEATURE_COLUMNS))
     st.header("Detector settings")
-    contamination_col, split_col, k_col = st.columns(3)
-    with contamination_col:
-        contamination = st.slider("Expected anomaly rate", 0.01, 0.10, 0.03, step=0.01)
+    split_col, clusters_col = st.columns(2)
     with split_col:
         test_size = st.slider("Test split", 0.10, 0.40, 0.20, step=0.05)
     training_rows = len(uploaded_df) if uploaded_df is not None else 8950
-    max_k = max(1, min(50, int(training_rows * (1 - test_size)) - 1))
-    with k_col:
-        n_neighbors = st.number_input(
-            "Neighbors (k, KNN)", min_value=1, max_value=max_k, value=min(10, max_k), step=1
+    max_clusters = max(1, min(50, int(training_rows * (1 - test_size))))
+    with clusters_col:
+        n_clusters = st.number_input(
+            "Number of clusters", min_value=1, max_value=max_clusters, value=min(3, max_clusters), step=1
         )
 
     dataset_name = uploaded_file.name if upload_is_valid and uploaded_file is not None else "Bundled credit-card sample"
-    train_col, compare_col = st.columns(2)
-    with train_col:
-        train_clicked = st.button(
-            f"Train {selected_model}",
-            type="primary",
-            disabled=uploaded_file is not None and not upload_is_valid,
-            use_container_width=True,
-        )
-    with compare_col:
-        compare_clicked = st.button(
-            "Train and compare both",
-            disabled=uploaded_file is not None and not upload_is_valid,
-            use_container_width=True,
-        )
+    train_clicked = st.button(
+        "Train K-Means Clustering",
+        type="primary",
+        disabled=uploaded_file is not None and not upload_is_valid,
+        use_container_width=True,
+    )
 
-    if train_clicked or compare_clicked:
-        models_to_train = list(MODEL_APIS) if compare_clicked else [selected_model]
-        with st.spinner("Training model(s) on the same dataset and holdout split..."):
+    if train_clicked:
+        with st.spinner("Training K-Means Clustering..."):
             try:
-                for model_name in models_to_train:
-                    train_model(
-                        model_name,
-                        contamination,
-                        test_size,
-                        int(n_neighbors),
-                        upload_bytes if upload_is_valid else None,
-                        dataset_name,
-                    )
-                st.success("Training complete for " + " and ".join(models_to_train) + ".")
+                train_model(
+                    test_size,
+                    int(n_clusters),
+                    upload_bytes if upload_is_valid else None,
+                    dataset_name,
+                )
+                st.success("K-Means Clustering training complete.")
             except requests.RequestException as error:
-                st.error(f"Could not connect to a model API: {error}")
+                st.error(f"Could not connect to the K-Means API: {error}")
             except ValueError as error:
                 st.error(str(error))
 
-    model_results = st.session_state["model_results"]
-    if all(model in model_results for model in MODEL_APIS):
-        isolation_result = model_results["Isolation Forest"]
-        knn_result = model_results["K-Nearest Neighbors"]
-        if isolation_result.get("comparison_signature") == knn_result.get("comparison_signature"):
-            isolation_auc = isolation_result["roc_curve"]["auc"]
-            knn_auc = knn_result["roc_curve"]["auc"]
-            isolation_f1 = isolation_result["classification_report"]["Anomaly"]["f1-score"]
-            knn_f1 = knn_result["classification_report"]["Anomaly"]["f1-score"]
-            st.subheader("Which model performed better?")
-            if abs(isolation_auc - knn_auc) < 0.01:
-                st.info(
-                    f"The models are close on ROC-AUC ({isolation_auc:.3f} vs {knn_auc:.3f}). "
-                    f"Anomaly F1 is {isolation_f1:.3f} for Isolation Forest and {knn_f1:.3f} for KNN; "
-                    "neither is a clear overall winner on this holdout."
-                )
-            else:
-                winner = "Isolation Forest" if isolation_auc > knn_auc else "K-Nearest Neighbors"
-                winner_auc = max(isolation_auc, knn_auc)
-                winner_f1 = isolation_f1 if winner == "Isolation Forest" else knn_f1
-                st.info(
-                    f"{winner} performed better on this holdout: ROC-AUC {winner_auc:.3f}. "
-                    f"Its anomaly-class F1 is {winner_f1:.3f}. ROC-AUC measures how well risk scores "
-                    "rank the heuristic high-risk examples across thresholds."
-                )
-            comparison = pd.DataFrame([
-                {"Model": "Isolation Forest", "ROC-AUC": isolation_auc, "Anomaly F1": isolation_f1},
-                {"Model": "K-Nearest Neighbors", "ROC-AUC": knn_auc, "Anomaly F1": knn_f1},
-            ])
-            st.dataframe(comparison, use_container_width=True, hide_index=True)
-            st.caption("Comparison uses the same dataset and split. Evaluation labels are balance/cash-advance heuristics, not verified fraud outcomes.")
-        else:
-            st.warning("These results use different data or split settings. Select ‘Train and compare both’ to compare them fairly.")
-
-    if selected_model in model_results:
-        data = model_results[selected_model]
-        if is_knn:
-            st.caption(f"Source: {data.get('dataset_name', dataset_name)} · k = {data['n_neighbors']} · anomaly threshold = {data['anomaly_threshold']:.4f}")
-        else:
-            st.caption(f"Source: {data.get('dataset_name', dataset_name)} · Isolation Forest")
+    data = st.session_state["kmeans_results"]
+    if data is not None:
+        st.caption(
+            f"Source: {data.get('dataset_name', dataset_name)} · clusters = {data['n_clusters']} "
+            f"· suspicious threshold = {data['suspicious_threshold']:.4f} "
+            f"· high-risk threshold = {data['anomaly_threshold']:.4f}"
+        )
         st.subheader("Run summary")
         metric_columns = st.columns(3)
         metric_columns[0].metric("Training rows", f"{data['train_samples']:,}")
@@ -377,7 +303,7 @@ with tab_train:
             figure = go.Figure()
             figure.add_trace(go.Scatter(
                 x=roc["fpr"], y=roc["tpr"], mode="lines",
-                name=f"{'KNN distance' if is_knn else 'Isolation Forest'} (AUC={roc['auc']:.3f})",
+                name=f"K-means centroid distance (AUC={roc['auc']:.3f})",
                 line={"color": theme["green"], "width": 3},
             ))
             figure.add_trace(go.Scatter(
@@ -395,31 +321,23 @@ with tab_train:
         show_classification_report(data)
 
         score_frame = pd.DataFrame(data["score_distribution"])
-        score_column = "anomaly_score" if is_knn else "decision_score"
-        score_title = (
-            "Neighbor-distance distribution"
-            if is_knn
-            else "Isolation Forest decision-score distribution"
-        )
-        score_description = (
-            "Higher distance indicates higher anomaly risk"
-            if is_knn
-            else "More negative scores indicate higher anomaly risk"
-        )
+        score_column = "anomaly_score"
+        score_title = "Centroid-distance distribution"
+        score_description = "Greater distance from the nearest centroid indicates higher anomaly risk"
         score_frame["classification"] = score_frame["is_anomaly"].map({0: "Normal", 1: "Anomaly"})
         st.subheader(score_title)
         score_figure = px.histogram(
             score_frame, x=score_column, color="classification", barmode="overlay",
             opacity=0.72, nbins=40, color_discrete_map={"Normal": theme["normal"], "Anomaly": theme["amber"]},
-            labels={score_column: "Mean neighbor distance" if is_knn else "Decision score", "classification": "Prediction"},
+            labels={score_column: "Nearest-centroid distance", "classification": "Prediction"},
             title=score_description,
         )
-        threshold = data["anomaly_threshold"] if is_knn else 0
+        threshold = data["anomaly_threshold"]
         score_figure.add_vline(
             x=threshold,
             line_dash="dash",
             line_color=theme["ink"],
-            annotation_text="Threshold" if is_knn else "Zero score",
+            annotation_text="Threshold",
         )
         style_chart(score_figure)
         score_figure.update_xaxes(gridcolor=theme["grid"], zeroline=False)
@@ -427,6 +345,92 @@ with tab_train:
         st.plotly_chart(score_figure, use_container_width=True, theme=None)
 
         pca_frame = pd.DataFrame(data["pca_scatter"])
+        if {"risk_level", "anomaly_score", "cluster_id"}.issubset(pca_frame.columns):
+            st.subheader("K-Means clusters")
+            st.caption(
+                f"Each point is assigned to one of {data['n_clusters']} learned clusters. "
+                "PCA projects the account features into two dimensions for display."
+            )
+            cluster_frame = pca_frame.copy()
+            cluster_frame["cluster"] = cluster_frame["cluster_id"].map(
+                lambda cluster_id: f"Cluster {cluster_id + 1}"
+            )
+            cluster_order = [
+                f"Cluster {cluster_id + 1}" for cluster_id in range(data["n_clusters"])
+            ]
+            cluster_figure = px.scatter(
+                cluster_frame,
+                x="pca1",
+                y="pca2",
+                color="cluster",
+                category_orders={"cluster": cluster_order},
+                color_discrete_sequence=px.colors.qualitative.Plotly,
+                hover_data={
+                    "cluster": True,
+                    "anomaly_score": ":.3f",
+                    "pca1": ":.3f",
+                    "pca2": ":.3f",
+                },
+                labels={
+                    "cluster": "K-Means group",
+                    "pca1": "PCA component 1",
+                    "pca2": "PCA component 2",
+                    "anomaly_score": "Centroid distance",
+                },
+                title="Account groups found by K-Means",
+            )
+            cluster_figure.update_traces(marker={"size": 8, "opacity": 0.85})
+            style_chart(cluster_figure)
+            cluster_figure.update_layout(height=500)
+            cluster_figure.update_xaxes(gridcolor=theme["grid"], zeroline=False)
+            cluster_figure.update_yaxes(gridcolor=theme["grid"], zeroline=False)
+            st.plotly_chart(cluster_figure, use_container_width=True, theme=None)
+
+            st.subheader("K-Means risk clusters")
+            st.caption(
+                "Risk groups use the training-set centroid-distance thresholds; they are not verified fraud labels."
+            )
+            risk_order = ["NORMAL", "SUSPICIOUS", "HIGH RISK"]
+            risk_frame = pca_frame.copy()
+            risk_frame["risk_level"] = pd.Categorical(
+                risk_frame["risk_level"],
+                categories=risk_order,
+                ordered=True,
+            )
+            risk_figure = px.scatter(
+                risk_frame,
+                x="pca1",
+                y="pca2",
+                color="risk_level",
+                category_orders={"risk_level": risk_order},
+                color_discrete_map={
+                    "NORMAL": theme["normal"],
+                    "SUSPICIOUS": theme["amber"],
+                    "HIGH RISK": theme["high_risk"],
+                },
+                hover_data={
+                    "risk_level": True,
+                    "cluster_id": True,
+                    "anomaly_score": ":.3f",
+                    "pca1": ":.3f",
+                    "pca2": ":.3f",
+                },
+                labels={
+                    "risk_level": "Risk group",
+                    "cluster_id": "K-Means cluster",
+                    "anomaly_score": "Centroid distance",
+                    "pca1": "PCA component 1",
+                    "pca2": "PCA component 2",
+                },
+                title="Normal, Suspicious, and High Risk accounts",
+            )
+            style_chart(risk_figure)
+            risk_figure.update_xaxes(gridcolor=theme["grid"], zeroline=False)
+            risk_figure.update_yaxes(gridcolor=theme["grid"], zeroline=False)
+            st.plotly_chart(risk_figure, use_container_width=True, theme=None)
+        else:
+            st.info("Retrain K-Means to generate the three risk groups for this chart.")
+
         pca_frame["classification"] = pca_frame["is_anomaly"].map({0: "Normal", 1: "Anomaly"})
         show_records = st.selectbox("PCA records", ["All records", "Anomalies only", "Normal only"])
         if show_records == "Anomalies only":
@@ -447,24 +451,53 @@ with tab_train:
 
 with tab_predict:
     st.header("Assess an account")
-    prediction_guidance = (
-        "Accounts farther from their nearest training examples receive higher anomaly scores."
-        if is_knn
-        else "Isolation Forest assigns lower decision scores to more isolated account patterns."
+    st.markdown("Accounts farther from their nearest cluster centroid receive higher anomaly scores.")
+    data = st.session_state["kmeans_results"]
+    example_options = ["Manual entry"]
+    if data is not None:
+        example_options.extend(data["dataset_examples"])
+
+    def load_dataset_example():
+        example_name = st.session_state["account_example"]
+        if example_name != "Manual entry":
+            for column, value in data["dataset_examples"][example_name].items():
+                st.session_state[f"account_{column}"] = value
+
+    st.selectbox(
+        "Quick-load an account",
+        example_options,
+        help="Load a representative account from the dataset used for the latest training run.",
+        key="account_example",
+        on_change=load_dataset_example if data is not None else None,
     )
-    st.markdown(prediction_guidance)
-    with st.form("knn_prediction_form"):
+    if data is None:
+        st.caption("Train the model first to load suspicious and high-risk examples from the selected dataset.")
+
+    default_values = {
+        "BALANCE": 40.90,
+        "PURCHASES": 95.40,
+        "INSTALLMENTS_PURCHASES": 95.40,
+        "CASH_ADVANCE": 0.0,
+        "CREDIT_LIMIT": 1000.0,
+        "PAYMENTS": 201.80,
+        "MINIMUM_PAYMENTS": 139.51,
+    }
+    for column, value in default_values.items():
+        st.session_state.setdefault(f"account_{column}", value)
+    st.session_state.setdefault("account_TENURE", 12)
+
+    with st.form("kmeans_prediction_form"):
         left, right = st.columns(2)
         with left:
-            balance = st.number_input("Account balance ($)", value=40.90, step=50.0)
-            purchases = st.number_input("Total purchases ($)", value=95.40, step=50.0)
-            installments = st.number_input("Installment purchases ($)", value=95.40, step=50.0)
-            cash_advance = st.number_input("Cash advance ($)", value=0.0, step=100.0)
+            balance = st.number_input("Account balance ($)", step=50.0, key="account_BALANCE")
+            purchases = st.number_input("Total purchases ($)", step=50.0, key="account_PURCHASES")
+            installments = st.number_input("Installment purchases ($)", step=50.0, key="account_INSTALLMENTS_PURCHASES")
+            cash_advance = st.number_input("Cash advance ($)", step=100.0, key="account_CASH_ADVANCE")
         with right:
-            credit_limit = st.number_input("Credit limit ($)", value=1000.0, step=500.0)
-            payments = st.number_input("Total payments ($)", value=201.80, step=50.0)
-            min_payments = st.number_input("Minimum payments ($)", value=139.51, step=20.0)
-            tenure = st.slider("Tenure (months)", 6, 12, 12)
+            credit_limit = st.number_input("Credit limit ($)", step=500.0, key="account_CREDIT_LIMIT")
+            payments = st.number_input("Total payments ($)", step=50.0, key="account_PAYMENTS")
+            min_payments = st.number_input("Minimum payments ($)", step=20.0, key="account_MINIMUM_PAYMENTS")
+            tenure = st.number_input("Tenure (months)", min_value=0, step=1, key="account_TENURE")
         predict_clicked = st.form_submit_button("Evaluate account", type="primary")
 
     if predict_clicked:
@@ -482,17 +515,15 @@ with tab_predict:
             response = requests.post(f"{API_URL}/predict", json=payload, timeout=30)
             if response.ok:
                 result = response.json()
-                if result["is_anomaly"]:
+                if result["risk_level"] == "HIGH RISK":
                     st.error(f"Status: {result['status']}")
+                elif result["risk_level"] == "SUSPICIOUS":
+                    st.warning(f"Status: {result['status']}")
                 else:
                     st.success(f"Status: {result['status']}")
-                if is_knn:
-                    st.metric("Mean neighbor distance", result["decision_score"], help=result["score_direction"])
-                    st.caption(f"Training threshold: {result['threshold']:.4f}")
-                else:
-                    st.metric("Isolation Forest decision score", result["decision_score"])
-                    st.caption("More negative decision scores indicate higher anomaly risk.")
+                st.metric("Nearest-centroid distance", result["decision_score"], help=result["score_direction"])
+                st.caption(f"Training threshold: {result['threshold']:.4f}")
             else:
                 st.error(response.json().get("detail", response.text))
         except requests.RequestException as error:
-            st.error(f"Cannot connect to KNN API at {API_URL}: {error}")
+            st.error(f"Cannot connect to the K-Means API at {API_URL}: {error}")
