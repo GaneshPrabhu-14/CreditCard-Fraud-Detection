@@ -18,11 +18,20 @@ FEATURE_COLUMNS = [
     "TENURE",
 ]
 
-st.set_page_config(page_title="Credit card Fraud Detection", layout="wide")
+st.set_page_config(page_title="Credit card fraud detection", layout="wide")
 
 brand_column, _, appearance_column = st.columns([3, 5, 2])
 with brand_column:
-    st.markdown("**Credit card Fraud Detection**")
+    st.markdown(
+        """<div class="brand-lockup">
+            <div class="brand-icon">CC</div>
+            <div>
+                <div class="brand-name">Credit card fraud detection</div>
+                <div class="brand-meta">Risk intelligence workspace</div>
+            </div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
 with appearance_column:
     appearance = st.radio(
         "Appearance",
@@ -64,11 +73,18 @@ st.markdown(
     [data-testid="stAppViewContainer"] > .main {{ background: var(--paper); }}
     .block-container {{ max-width: 1440px; padding: 4.5rem 1.5rem 3rem; }}
     h1, h2, h3, p, label {{ color: var(--ink); }}
+    .brand-lockup {{ display:flex; align-items:center; gap:.75rem; min-height:2.8rem; }}
+    .brand-icon {{ display:grid; place-items:center; width:2.5rem; height:2.5rem;
+        background:var(--green); color:var(--white); border-radius:8px;
+        font:700 .78rem 'IBM Plex Mono',monospace; letter-spacing:-.04em; }}
+    .brand-name {{ color:var(--ink); font-size:.95rem; font-weight:700; letter-spacing:-.02em; }}
+    .brand-meta {{ color:var(--muted); font-size:.72rem; margin-top:.15rem; }}
     .masthead {{ display:flex; justify-content:space-between; align-items:flex-end; gap:1rem;
         padding:1.25rem 0 1.4rem; margin-bottom:1.2rem; border-bottom:1px solid var(--line); }}
     .eyebrow {{ color:var(--green); font:500 .72rem 'IBM Plex Mono',monospace;
         text-transform:uppercase; margin:0 0 .55rem; }}
-    .masthead h1 {{ font-size:2rem; margin:0; font-weight:600; }}
+    .masthead h1 {{ font-size:2.5rem; line-height:1.1; letter-spacing:-.04em;
+        margin:0; font-weight:700; }}
     .masthead p {{ color:var(--muted); margin:.55rem 0 0; }}
     .service-tag {{ border:1px solid var(--line); background:var(--white); color:var(--muted);
         padding:.45rem .7rem; font: .72rem 'IBM Plex Mono',monospace; white-space:nowrap; }}
@@ -115,7 +131,7 @@ st.markdown(
     .report-table th, .report-table td {{ padding:.5rem; border-bottom:1px solid var(--line); color:var(--ink); text-align:left; }}
     .report-table thead th {{ background:var(--green-soft); }}
     @media(max-width:700px) {{ .block-container {{ padding:3.5rem 1rem 2rem; }}
-        .masthead {{ align-items:flex-start; flex-direction:column; }} .masthead h1 {{ font-size:1.55rem; }} }}
+        .masthead {{ align-items:flex-start; flex-direction:column; }} .masthead h1 {{ font-size:1.8rem; }} }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -124,8 +140,8 @@ st.markdown(
 st.markdown(
         f"""<header class="masthead"><div>
             <div class="eyebrow">Risk intelligence / transaction monitoring</div>
-            <h1>K-Means Clustering anomaly review</h1>
-            <p>Accounts farther from their nearest cluster centroid receive higher anomaly scores.</p>
+            <h1>Credit card fraud detection</h1>
+            <p>K-Means anomaly review · accounts farther from a cluster centroid receive higher risk scores.</p>
         </div><div class="service-tag">ACTIVE · K-MEANS</div></header>""",
         unsafe_allow_html=True,
 )
@@ -431,23 +447,47 @@ with tab_train:
         else:
             st.info("Retrain K-Means to generate the three risk groups for this chart.")
 
-        pca_frame["classification"] = pca_frame["is_anomaly"].map({0: "Normal", 1: "Anomaly"})
+        if "risk_level" in pca_frame:
+            pca_frame["classification"] = pca_frame["risk_level"].map(
+                {"NORMAL": "Normal", "SUSPICIOUS": "Suspicious", "HIGH RISK": "Anomaly"}
+            )
+        else:
+            pca_frame["classification"] = pca_frame["is_anomaly"].map(
+                {0: "Normal", 1: "Anomaly"}
+            )
         show_records = st.selectbox("PCA records", ["All records", "Anomalies only", "Normal only"])
         if show_records == "Anomalies only":
             pca_frame = pca_frame[pca_frame["is_anomaly"] == 1]
         elif show_records == "Normal only":
             pca_frame = pca_frame[pca_frame["is_anomaly"] == 0]
         st.caption(f"Showing {len(pca_frame):,} test rows")
-        pca_figure = px.scatter(
-            pca_frame, x="pca1", y="pca2", color="classification",
-            color_discrete_map={"Normal": theme["normal"], "Anomaly": theme["amber"]},
-            hover_data={"classification": True, "pca1": ":.3f", "pca2": ":.3f"},
-            title="PCA projection of detected anomalies",
+        record_columns = [
+            column
+            for column in (
+                "classification",
+                "risk_level",
+                "cluster_id",
+                "anomaly_score",
+                "pca1",
+                "pca2",
+            )
+            if column in pca_frame.columns
+        ]
+        pca_records = pca_frame[record_columns].rename(
+            columns={
+                "classification": "Prediction",
+                "risk_level": "Risk level",
+                "cluster_id": "K-Means cluster",
+                "anomaly_score": "Centroid distance",
+                "pca1": "PCA component 1",
+                "pca2": "PCA component 2",
+            }
         )
-        style_chart(pca_figure)
-        pca_figure.update_xaxes(gridcolor=theme["grid"], zeroline=False)
-        pca_figure.update_yaxes(gridcolor=theme["grid"], zeroline=False)
-        st.plotly_chart(pca_figure, use_container_width=True, theme=None)
+        if "K-Means cluster" in pca_records:
+            pca_records["K-Means cluster"] = pca_records["K-Means cluster"].map(
+                lambda cluster_id: f"Cluster {cluster_id + 1}"
+            )
+        st.dataframe(pca_records, hide_index=True, width="stretch")
 
 with tab_predict:
     st.header("Assess an account")
