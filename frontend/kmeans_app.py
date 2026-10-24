@@ -18,7 +18,7 @@ FEATURE_COLUMNS = [
     "TENURE",
 ]
 
-st.set_page_config(page_title="Credit card fraud detection", layout="wide")
+st.set_page_config(page_title="Credit card KNN anomaly detection", layout="wide")
 
 brand_column, _, appearance_column = st.columns([3, 5, 2])
 with brand_column:
@@ -140,9 +140,9 @@ st.markdown(
 st.markdown(
         f"""<header class="masthead"><div>
             <div class="eyebrow">Risk intelligence / transaction monitoring</div>
-            <h1>Credit card fraud detection</h1>
-            <p>K-Means anomaly review · accounts farther from a cluster centroid receive higher risk scores.</p>
-        </div><div class="service-tag">ACTIVE · K-MEANS</div></header>""",
+            <h1>Credit card KNN anomaly detection</h1>
+            <p>KNN anomaly review · accounts farther from their nearest neighbors receive higher risk scores.</p>
+        </div><div class="service-tag">ACTIVE · KNN</div></header>""",
         unsafe_allow_html=True,
 )
 
@@ -215,7 +215,7 @@ def train_model(test_size, n_clusters, upload_bytes, dataset_name):
             detail = response.json().get("detail", response.text)
         except ValueError:
             detail = response.text
-        raise ValueError(f"K-Means Clustering: {detail}")
+        raise ValueError(f"KNN: {detail}")
 
     result = response.json()
     result["dataset_name"] = dataset_name
@@ -256,26 +256,26 @@ with tab_train:
 
     st.caption("Required numeric columns: " + " · ".join(FEATURE_COLUMNS))
     st.header("Detector settings")
-    split_col, clusters_col = st.columns(2)
+    split_col, neighbors_col = st.columns(2)
     with split_col:
         test_size = st.slider("Test split", 0.10, 0.40, 0.20, step=0.05)
     training_rows = len(uploaded_df) if uploaded_df is not None else 8950
-    max_clusters = max(1, min(50, int(training_rows * (1 - test_size))))
-    with clusters_col:
+    max_neighbors = max(1, min(50, int(training_rows * (1 - test_size))))
+    with neighbors_col:
         n_clusters = st.number_input(
-            "Number of clusters", min_value=1, max_value=max_clusters, value=min(3, max_clusters), step=1
+            "Number of nearest neighbors", min_value=1, max_value=max_neighbors, value=min(5, max_neighbors), step=1
         )
 
     dataset_name = uploaded_file.name if upload_is_valid and uploaded_file is not None else "Bundled credit-card sample"
     train_clicked = st.button(
-        "Train K-Means Clustering",
+        "Train KNN",
         type="primary",
         disabled=uploaded_file is not None and not upload_is_valid,
         use_container_width=True,
     )
 
     if train_clicked:
-        with st.spinner("Training K-Means Clustering..."):
+        with st.spinner("Training KNN..."):
             try:
                 train_model(
                     test_size,
@@ -283,16 +283,16 @@ with tab_train:
                     upload_bytes if upload_is_valid else None,
                     dataset_name,
                 )
-                st.success("K-Means Clustering training complete.")
+                st.success("KNN training complete.")
             except requests.RequestException as error:
-                st.error(f"Could not connect to the K-Means API: {error}")
+                st.error(f"Could not connect to the KNN API: {error}")
             except ValueError as error:
                 st.error(str(error))
 
     data = st.session_state["kmeans_results"]
     if data is not None:
         st.caption(
-            f"Source: {data.get('dataset_name', dataset_name)} · clusters = {data['n_clusters']} "
+            f"Source: {data.get('dataset_name', dataset_name)} · nearest neighbors = {data['n_neighbors']} "
             f"· suspicious threshold = {data['suspicious_threshold']:.4f} "
             f"· high-risk threshold = {data['anomaly_threshold']:.4f}"
         )
@@ -319,7 +319,7 @@ with tab_train:
             figure = go.Figure()
             figure.add_trace(go.Scatter(
                 x=roc["fpr"], y=roc["tpr"], mode="lines",
-                name=f"K-means centroid distance (AUC={roc['auc']:.3f})",
+                name=f"KNN neighbor distance (AUC={roc['auc']:.3f})",
                 line={"color": theme["green"], "width": 3},
             ))
             figure.add_trace(go.Scatter(
@@ -338,14 +338,14 @@ with tab_train:
 
         score_frame = pd.DataFrame(data["score_distribution"])
         score_column = "anomaly_score"
-        score_title = "Centroid-distance distribution"
-        score_description = "Greater distance from the nearest centroid indicates higher anomaly risk"
+        score_title = "Nearest-neighbor distance distribution"
+        score_description = "Greater average distance from nearest neighbors indicates higher anomaly risk"
         score_frame["classification"] = score_frame["is_anomaly"].map({0: "Normal", 1: "Anomaly"})
         st.subheader(score_title)
         score_figure = px.histogram(
             score_frame, x=score_column, color="classification", barmode="overlay",
             opacity=0.72, nbins=40, color_discrete_map={"Normal": theme["normal"], "Anomaly": theme["amber"]},
-            labels={score_column: "Nearest-centroid distance", "classification": "Prediction"},
+            labels={score_column: "Average neighbor distance", "classification": "Prediction"},
             title=score_description,
         )
         threshold = data["anomaly_threshold"]
@@ -445,7 +445,7 @@ with tab_train:
             risk_figure.update_yaxes(gridcolor=theme["grid"], zeroline=False)
             st.plotly_chart(risk_figure, use_container_width=True, theme=None)
         else:
-            st.info("Retrain K-Means to generate the three risk groups for this chart.")
+            st.info("Retrain KNN to generate the risk groups for this chart.")
 
         if "risk_level" in pca_frame:
             pca_frame["classification"] = pca_frame["risk_level"].map(
@@ -491,7 +491,7 @@ with tab_train:
 
 with tab_predict:
     st.header("Assess an account")
-    st.markdown("Accounts farther from their nearest cluster centroid receive higher anomaly scores.")
+    st.markdown("Accounts farther from their nearest neighbors receive higher anomaly scores.")
     data = st.session_state["kmeans_results"]
     example_options = ["Manual entry"]
     if data is not None:
@@ -561,9 +561,9 @@ with tab_predict:
                     st.warning(f"Status: {result['status']}")
                 else:
                     st.success(f"Status: {result['status']}")
-                st.metric("Nearest-centroid distance", result["decision_score"], help=result["score_direction"])
+                st.metric("Average neighbor distance", result["decision_score"], help=result["score_direction"])
                 st.caption(f"Training threshold: {result['threshold']:.4f}")
             else:
                 st.error(response.json().get("detail", response.text))
         except requests.RequestException as error:
-            st.error(f"Cannot connect to the K-Means API at {API_URL}: {error}")
+            st.error(f"Cannot connect to the KNN API at {API_URL}: {error}")

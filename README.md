@@ -3,9 +3,9 @@
 A Streamlit and FastAPI project for exploring unusual credit-card account activity. It includes two independent unsupervised anomaly detectors:
 
 - **Isolation Forest** identifies accounts that are isolated from the broader feature distribution.
-- **K-Means Clustering** groups accounts around learned centroids and scores accounts by their distance from the nearest centroid. Larger distances indicate higher anomaly risk.
+- **K-Nearest Neighbors (KNN)** scores accounts by their average distance from nearby training accounts. Larger distances indicate higher anomaly risk.
 
-The K-Means dashboard trains and evaluates K-Means only. Isolation Forest remains available as a separate app.
+The KNN dashboard trains and evaluates KNN only. Isolation Forest remains available as a separate app.
 
 ## Requirements
 
@@ -37,19 +37,19 @@ python -m streamlit run frontend/app.py --server.port 8501
 
 Open [http://localhost:8501](http://localhost:8501). The API root is at [http://localhost:8000](http://localhost:8000), and its interactive API documentation is at [http://localhost:8000/docs](http://localhost:8000/docs).
 
-## Run the K-Means App
+## Run the KNN App
 
 Start its separate API and dashboard in two more terminals:
 
 ```powershell
-python -m uvicorn backend.kmeans_main:app --reload --port 8001
+python -m uvicorn backend.knn_main:app --reload --port 8001
 ```
 
 ```powershell
 python -m streamlit run frontend/kmeans_app.py --server.port 8502
 ```
 
-Open [http://localhost:8502](http://localhost:8502). The dashboard trains and evaluates K-Means Clustering, with controls for the test split and number of clusters. On the account assessment tab, train the model to enable quick-load examples for suspicious and high-risk accounts from the active training dataset.
+Open [http://localhost:8502](http://localhost:8502). The dashboard trains and evaluates KNN, with controls for the test split and number of nearest neighbors. On the account assessment tab, train the model to enable quick-load examples for suspicious and high-risk accounts from the active training dataset.
 
 Keep each API and its dashboard running in separate terminals. The two apps use distinct model artifacts, so training one does not replace the other model's files.
 
@@ -68,7 +68,7 @@ The dashboards can train from the bundled `data/credit_card.csv` file or an uplo
 | `MINIMUM_PAYMENTS` | Minimum payments |
 | `TENURE` | Account tenure in months |
 
-`CUST_ID` and other extra columns are ignored. Missing values in required features are filled with each feature's training median. At least two rows must remain in the test split. The K-Means cluster count cannot exceed the number of training rows.
+`CUST_ID` and other extra columns are ignored. Missing values in required features are filled with each feature's training median. At least two rows must remain in the test split. The KNN neighbor count cannot exceed the number of training rows.
 
 ## Evaluation Notes
 
@@ -76,11 +76,11 @@ The dashboards show a confusion matrix, ROC curve and AUC, classification report
 
 The dataset does not provide verified fraud labels. For evaluation only, the application creates reference labels using `CASH_ADVANCE > 4500` or `BALANCE > 8000`. These are heuristics, not confirmed fraud outcomes, so evaluation results should not be interpreted as proof that the detector identifies confirmed fraud.
 
-For K-Means, ROC-AUC indicates how well centroid-distance scores rank the heuristic high-risk examples across thresholds. Anomaly-class F1 reflects precision and recall at the high-risk cutoff. The suspicious and high-risk bands are determined by the 90th and 97th percentiles of training centroid distances.
+For KNN, ROC-AUC indicates how well average-neighbor-distance scores rank the heuristic high-risk examples across thresholds. Anomaly-class F1 reflects precision and recall at the high-risk cutoff. The suspicious and high-risk bands are determined by the 90th and 97th percentiles of training neighbor distances.
 
 ## API Endpoints
 
-Both APIs expose the same routes; use port `8000` for Isolation Forest and `8001` for K-Means Clustering.
+Both APIs expose the same routes; use port `8000` for Isolation Forest and `8001` for KNN.
 
 | Method | Route | Purpose |
 | --- | --- | --- |
@@ -89,13 +89,13 @@ Both APIs expose the same routes; use port `8000` for Isolation Forest and `8001
 | `POST` | `/train/upload` | Train from a raw CSV request body |
 | `POST` | `/predict` | Score one account |
 
-Training options include `test_size` and `n_clusters` (default `3`). The upload endpoint accepts these as query parameters and expects the CSV bytes in the request body.
+Training options include `test_size` and `n_neighbors` (default `5`). The upload endpoint accepts these as query parameters and expects the CSV bytes in the request body.
 
 ## Model Artifacts
 
 Training saves artifacts under `models/`:
 
 - Isolation Forest: `anomaly_model.joblib`, `scaler.joblib`
-- K-Means: `kmeans_model.joblib`, `kmeans_scaler.joblib`
+- KNN: `knn_neighbor_model.joblib`, `knn_scaler.joblib`
 
 Retraining a detector replaces that detector's artifacts.
