@@ -26,7 +26,6 @@ class AccountPayload(BaseModel):
 class KNNTrainConfig(BaseModel):
     test_size: float = 0.20
     n_neighbors: int = 5
-    n_clusters: int | None = None
 
 
 @app.get("/")
@@ -37,8 +36,7 @@ def root():
 @app.post("/train")
 def train_model(config: KNNTrainConfig):
     try:
-        neighbor_count = config.n_neighbors if config.n_clusters is None else config.n_clusters
-        results = train_and_evaluate_knn(config.test_size, neighbor_count)
+        results = train_and_evaluate_knn(config.test_size, config.n_neighbors)
         results["dataset_name"] = "Bundled credit-card sample"
         return results
     except ValueError as error:
@@ -52,7 +50,6 @@ async def train_uploaded_model(
     request: Request,
     test_size: float = 0.20,
     n_neighbors: int = 5,
-    n_clusters: int | None = None,
     filename: str = "Uploaded CSV",
 ):
     content = await request.body()
@@ -63,8 +60,7 @@ async def train_uploaded_model(
 
     try:
         dataset = pd.read_csv(BytesIO(content))
-        neighbor_count = n_neighbors if n_clusters is None else n_clusters
-        results = train_and_evaluate_knn(test_size, neighbor_count, dataset)
+        results = train_and_evaluate_knn(test_size, n_neighbors, dataset)
         results["dataset_name"] = filename
         return results
     except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError) as error:

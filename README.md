@@ -46,7 +46,7 @@ python -m uvicorn backend.knn_main:app --reload --port 8001
 ```
 
 ```powershell
-python -m streamlit run frontend/kmeans_app.py --server.port 8502
+python -m streamlit run frontend/knn_app.py --server.port 8502
 ```
 
 Open [http://localhost:8502](http://localhost:8502). The dashboard trains and evaluates KNN, with controls for the test split and number of nearest neighbors. On the account assessment tab, train the model to enable quick-load examples for suspicious and high-risk accounts from the active training dataset.

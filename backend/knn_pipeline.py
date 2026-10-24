@@ -152,7 +152,6 @@ def train_and_evaluate_knn(
         "train_samples": len(X_train),
         "test_samples": len(X_test),
         "n_neighbors": n_neighbors,
-        "n_clusters": n_neighbors,
         "suspicious_threshold": suspicious_threshold,
         "anomaly_threshold": high_risk_threshold,
         "dataset_examples": dataset_examples,
