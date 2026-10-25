@@ -7,9 +7,9 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from kmeans_pipeline import predict_kmeans_account, train_and_evaluate_kmeans
+from knn_pipeline import predict_knn_account, train_and_evaluate_knn
 
-app = FastAPI(title="K-Means Credit Card Anomaly Detection API", version="1.0")
+app = FastAPI(title="KNN Credit Card Anomaly Detection API", version="1.0")
 
 
 class AccountPayload(BaseModel):
@@ -23,23 +23,20 @@ class AccountPayload(BaseModel):
     TENURE: int
 
 
-class KMeansTrainConfig(BaseModel):
+class KNNTrainConfig(BaseModel):
     test_size: float = 0.20
-    n_clusters: int = 3
+    n_neighbors: int = 5
 
 
 @app.get("/")
 def root():
-    return {"message": "K-means clustering anomaly detection API is running."}
+    return {"message": "KNN nearest-neighbor anomaly detection API is running."}
 
 
 @app.post("/train")
-def train_model(config: KMeansTrainConfig):
+def train_model(config: KNNTrainConfig):
     try:
-        results = train_and_evaluate_kmeans(
-            config.test_size,
-            config.n_clusters,
-        )
+        results = train_and_evaluate_knn(config.test_size, config.n_neighbors)
         results["dataset_name"] = "Bundled credit-card sample"
         return results
     except ValueError as error:
@@ -52,7 +49,7 @@ def train_model(config: KMeansTrainConfig):
 async def train_uploaded_model(
     request: Request,
     test_size: float = 0.20,
-    n_clusters: int = 3,
+    n_neighbors: int = 5,
     filename: str = "Uploaded CSV",
 ):
     content = await request.body()
@@ -63,11 +60,7 @@ async def train_uploaded_model(
 
     try:
         dataset = pd.read_csv(BytesIO(content))
-        results = train_and_evaluate_kmeans(
-            test_size,
-            n_clusters,
-            dataset,
-        )
+        results = train_and_evaluate_knn(test_size, n_neighbors, dataset)
         results["dataset_name"] = filename
         return results
     except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError) as error:
@@ -81,7 +74,7 @@ async def train_uploaded_model(
 @app.post("/predict")
 def predict_anomaly(payload: AccountPayload):
     try:
-        return predict_kmeans_account(payload.dict())
+        return predict_knn_account(payload.model_dump())
     except FileNotFoundError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except Exception as error:
